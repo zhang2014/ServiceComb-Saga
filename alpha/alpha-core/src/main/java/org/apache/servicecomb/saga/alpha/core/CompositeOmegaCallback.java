@@ -29,6 +29,11 @@ public class CompositeOmegaCallback implements OmegaCallback {
   }
 
   @Override
+  public void retries(TxEvent event) {
+    
+  }
+
+  @Override
   public void compensate(TxEvent event) {
     Map<String, OmegaCallback> serviceCallbacks = callbacks.getOrDefault(event.serviceName(), emptyMap());
 

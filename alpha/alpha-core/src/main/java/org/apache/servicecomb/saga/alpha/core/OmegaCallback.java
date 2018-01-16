@@ -18,6 +18,9 @@
 package org.apache.servicecomb.saga.alpha.core;
 
 public interface OmegaCallback {
+  default void retries(TxEvent event){
+
+  }
   void compensate(TxEvent event);
 
   default void disconnect() {

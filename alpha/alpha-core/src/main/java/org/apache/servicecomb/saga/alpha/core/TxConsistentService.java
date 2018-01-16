@@ -35,19 +35,25 @@ import java.util.concurrent.Executors;
 import java.util.function.Consumer;
 
 public class TxConsistentService {
-  private static final Consumer<TxEvent> DO_NOTHING_CONSUMER = event -> {};
+  private static final Consumer<TxEvent> DO_NOTHING_CONSUMER = event -> {
+  };
 
   private static final byte[] EMPTY_PAYLOAD = new byte[0];
 
   private final TxEventRepository eventRepository;
+
   private final OmegaCallback omegaCallback;
+
   private final Map<String, Consumer<TxEvent>> eventCallbacks = new HashMap<String, Consumer<TxEvent>>() {{
     put(TxEndedEvent.name(), (event) -> compensateIfAlreadyAborted(event));
-    put(TxAbortedEvent.name(), (event) -> compensate(event));
+    put(TxAbortedEvent.name(), (event) -> retries(event));
     put(TxCompensatedEvent.name(), (event) -> updateCompensateStatus(event));
   }};
 
   private final Map<String, Set<String>> eventsToCompensate = new HashMap<>();
+
+  private final Map<String, Integer> eventsToRetries = new HashMap<>();
+
   private final ExecutorService executor = Executors.newSingleThreadExecutor();
 
   public TxConsistentService(TxEventRepository eventRepository, OmegaCallback omegaCallback) {
@@ -80,12 +86,29 @@ public class TxConsistentService {
     return eventsToCompensate.getOrDefault(event.globalTxId(), emptySet()).contains(event.localTxId());
   }
 
-  private void compensate(TxEvent event) {
+  private void retries(TxEvent event) {
     List<TxEvent> events = eventRepository.findTransactionsToCompensate(event.globalTxId());
 
+    for (TxEvent txEvent : events) {
+      if (txEvent.containChildren(event)) {
+        Integer retried = eventsToRetries.compute(txEvent.localTxId(), (k, v) -> v == null ? 0 : v + 1);
+
+        if (retried < txEvent.retries()) {
+          omegaCallback.retries(txEvent);
+        } else {
+          compensate(event.globalTxId(), events);
+        }
+
+        return;
+      }
+    }
+  }
+
+
+  private void compensate(String globalTxId, List<TxEvent> events) {
     events.removeIf(this::isCompensationScheduled);
 
-    Set<String> localTxIds = eventsToCompensate.computeIfAbsent(event.globalTxId(), k -> new HashSet<>());
+    Set<String> localTxIds = eventsToCompensate.computeIfAbsent(globalTxId, k -> new HashSet<>());
     events.forEach(e -> localTxIds.add(e.localTxId()));
 
     events.forEach(omegaCallback::compensate);
